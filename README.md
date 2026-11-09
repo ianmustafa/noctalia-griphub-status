@@ -1,22 +1,11 @@
 # GripHub Status
 
 `ianmustafa/griphub-status` is a community-maintained Noctalia plugin. It is
-not official Noctalia maintenance: it is not produced, maintained, or endorsed
-by Noctalia. This repository does not claim official catalog inclusion. It is
-structured for review and submission to `noctalia-dev/community-plugins`.
+not produced, maintained, or endorsed by Noctalia, and this repository does
+not claim official catalog inclusion. It is structured for review and
+submission to `noctalia-dev/community-plugins`.
 
-
-## Plugin
-
-This community plugin is published as **`ianmustafa/griphub-status`**. Its bar
-widget entry is **`bar`**, loaded from `widget.luau`.
-
-## Requirements
-
-The portal click uses the external command **`xdg-open`**, which must be
-installed and is declared in the manifest dependencies.
-
-## Usage
+## Setup
 
 1. Install the plugin from a local checkout or the community-plugin review
    workflow.
