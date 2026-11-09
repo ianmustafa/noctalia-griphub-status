@@ -304,3 +304,56 @@ assertEqual(neutral:getState().remaining, nil, "failed first fetch has no balanc
 assertEqual(neutral:getState().text, "—", "failed first fetch stays neutral")
 
 print("refresh lifecycle tests passed")
+-- Balance formatting and active-batch tooltip boundaries use the controller seam.
+local function presentation(value, precision, account, clock, localTime)
+  local callbacksForCase = {}
+  local settings = { token = "presentation-secret", refresh_seconds = 30, precision = precision, glyph = "star" }
+  local case = Controller.new({
+    host = {
+      getConfig = function(_, key) return settings[key] end,
+      render = function() end,
+      formatLocalTime = localTime,
+    },
+    now = clock,
+    http = function(_, callback) callbacksForCase[#callbacksForCase + 1] = callback; return true end,
+  })
+  case:start()
+  callbacksForCase[1]({ ok = true, status = 200, body = { account = account or { creditsBalance = value } } })
+  return case:getState()
+end
+
+assertEqual(presentation(999.94, 1).text, "999.9", "values below one thousand use fixed point")
+assertEqual(presentation(1000, 1).text, "1.0K", "thousand compact threshold")
+assertEqual(presentation(1000000, 0).text, "1M", "million compact threshold and precision")
+assertEqual(presentation(1234567890, 4).text, "1.2346B", "billions use selected precision")
+assertEqual(presentation(999.95, 1).text, "1000.0", "ordinary rounding below compact threshold")
+assertEqual(presentation(32.55458, 4).hover, "32.55458", "hover keeps exact un-compacted balance")
+
+local batches = {
+  { credits = 5, expiresAt = 200, reason = "promo_code_bonus" },
+  { credits = 4, expiresAt = 100, reason = "expired" },
+  { credits = 3, expiresAt = 101, reason = "next_up" },
+  { credits = 2, reason = nil },
+  { credits = 0, expiresAt = 300, reason = "zero" },
+  { credits = -1, expiresAt = 300, reason = "negative" },
+  { credits = "invalid", expiresAt = 300, reason = "malformed" },
+  { credits = 7, expiresAt = 100, reason = "boundary" },
+  { credits = 6, expiresAt = "invalid", reason = "bad expiry" },
+}
+local batchState = presentation(12.25, 1, { creditsBalance = 12.25, batches = batches }, function() return 100 end,
+  function(epoch) return "LOCAL(" .. tostring(epoch) .. ")" end)
+assertTrue(batchState.hover:find("Active batches:", 1, true) ~= nil, "active breakdown heading")
+assertTrue(batchState.hover:find("3 credits; expires LOCAL(101); reason Next up", 1, true) ~= nil, "earliest active expiry first")
+assertTrue(batchState.hover:find("5 credits; expires LOCAL(200); reason Promo code bonus", 1, true) ~= nil, "reason and local expiry formatting")
+assertTrue(batchState.hover:find("2 credits; No expiry reported; reason Reason unavailable", 1, true) ~= nil, "missing expiry and reason labels")
+assertEqual(batchState.hover:find("expired", 1, true), nil, "expired and boundary rows omitted")
+assertEqual(batchState.hover:find("zero", 1, true), nil, "zero rows omitted")
+assertEqual(batchState.hover:find("negative", 1, true), nil, "negative rows omitted")
+assertEqual(batchState.hover:find("malformed", 1, true), nil, "malformed rows omitted")
+assertEqual(batchState.hover:find("bad expiry", 1, true), nil, "invalid expiry rows omitted")
+
+local emptyBatchState = presentation(4, 1, { creditsBalance = 4, batches = {
+  { credits = 0, expiresAt = 200 }, { credits = -2 }, { credits = 1, expiresAt = 50 },
+} }, function() return 100 end)
+assertEqual(emptyBatchState.hover:find("Active batches:", 1, true), nil, "empty active breakdown omitted")
+print("formatting and batch tests passed")

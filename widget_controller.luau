@@ -16,8 +16,89 @@ local function getConfig(host, key)
   return nil
 end
 local function exactBalance(value) return tostring(value) end
+local function rounded(value, precision)
+  local factor = 10 ^ precision
+  local result = math.floor(math.abs(value) * factor + 0.5) / factor
+  if value < 0 then result = -result end
+  return result == 0 and 0 or result
+end
+local function fixedBalance(value, precision)
+  return string.format("%." .. tostring(precision) .. "f", rounded(value, precision))
+end
 local function displayBalance(value, precision)
-  return string.format("%." .. tostring(precision) .. "f", value)
+  local magnitude = math.abs(value)
+  if magnitude < 1000 then return fixedBalance(value, precision) end
+  local suffixes = { "", "K", "M", "B", "T" }
+  local index, divisor = 1, 1
+  while index < #suffixes and magnitude >= divisor * 1000 do
+    divisor, index = divisor * 1000, index + 1
+  end
+  return fixedBalance(value / divisor, precision) .. suffixes[index]
+end
+local function parseExpiry(value)
+  if value == nil or value == "" then return nil, true end
+  local numeric = finite(value)
+  if numeric ~= nil then return numeric, true end
+  if type(value) ~= "string" then return nil, false end
+  local year, month, day, hour, minute, second = value:match("^(%d%d%d%d)%-(%d%d)%-(%d%d)[T ](%d%d):(%d%d):(%d%d)")
+  if not year then return nil, false end
+  local localEpoch = os.time({ year = tonumber(year), month = tonumber(month), day = tonumber(day),
+    hour = tonumber(hour), min = tonumber(minute), sec = tonumber(second), isdst = false })
+  if localEpoch == nil then return nil, false end
+  local utcEpoch = os.time(os.date("!*t", localEpoch))
+  if utcEpoch == nil then return nil, false end
+  return localEpoch + os.difftime(localEpoch, utcEpoch), true
+end
+local function localTime(host, epoch)
+  local formatter = host.formatLocalTime or host.localTime
+  if type(formatter) == "function" then
+    local ok, value = pcall(function() return formatter(epoch) end)
+    if ok and value ~= nil then return tostring(value) end
+  end
+  return os.date("%Y-%m-%d %H:%M:%S", epoch)
+end
+local function humanizeReason(value)
+  local reason = trim(value)
+  if reason == "" then return "Reason unavailable" end
+  reason = reason:gsub("[_%-]+", " "):gsub("%s+", " ")
+  return reason:gsub("^%l", string.upper)
+end
+local function activeBatches(account, now, host)
+  local result, source = {}, account and account.batches
+  if type(source) ~= "table" then return result end
+  now = finite(now) or os.time()
+  for index, batch in ipairs(source) do
+    if type(batch) == "table" then
+      local amount = finite(batch.credits or batch.amount)
+      local rawExpiry = batch.expiresAt
+      if rawExpiry == nil then rawExpiry = batch.expires_at end
+      if rawExpiry == nil then rawExpiry = batch.expiry end
+      local expiry, validExpiry = parseExpiry(rawExpiry)
+      if amount ~= nil and amount > 0 and validExpiry and (expiry == nil or expiry > now) then
+        result[#result + 1] = { amount = amount, expiry = expiry, reason = humanizeReason(batch.reason), order = index }
+      end
+    end
+  end
+  table.sort(result, function(left, right)
+    if left.expiry == nil then return right.expiry ~= nil end
+    if right.expiry == nil then return false end
+    if left.expiry == right.expiry then return left.order < right.order end
+    return left.expiry < right.expiry
+  end)
+  return result
+end
+local function breakdownText(batches, host)
+  if type(batches) ~= "table" or #batches == 0 then return nil end
+  local lines = { "Active batches:" }
+  for _, batch in ipairs(batches) do
+    local expiry = batch.expiry == nil and "No expiry reported" or "expires " .. localTime(host, batch.expiry)
+    lines[#lines + 1] = "- " .. exactBalance(batch.amount) .. " credits; " .. expiry .. "; reason " .. batch.reason
+  end
+  return table.concat(lines, "\n")
+end
+local function appendBreakdown(hover, batches, host)
+  local details = breakdownText(batches, host)
+  return details == nil and hover or hover .. "\n" .. details
 end
 local function stateView(state)
   local text = state.text or "—"
@@ -25,7 +106,8 @@ local function stateView(state)
     hoverText = state.hover, status = state.status, remaining = state.remaining,
     stale = state.stale == true, failureClass = state.failureClass,
     lastSuccessAt = state.lastSuccessAt, lastSuccessTime = state.lastSuccessAt,
-    suspended = state.suspended == true, suspendedUntil = state.suspendedUntil }
+    suspended = state.suspended == true, suspendedUntil = state.suspendedUntil,
+    batches = state.batches }
 end
 
 function M.new(adapters)
@@ -38,7 +120,7 @@ function M.new(adapters)
   local self = { host = host, notify = notify, openPortal = openPortal, http = http,
     inFlight = false, generation = 0, warningSent = false, endpoint = nil,
     state = { status = "unconfigured", text = "—", glyph = "lightning", hover = "Token not configured",
-      remaining = nil, stale = false, failureClass = nil, lastSuccessAt = nil, suspended = false, suspendedUntil = nil } }
+      remaining = nil, batches = {}, stale = false, failureClass = nil, lastSuccessAt = nil, suspended = false, suspendedUntil = nil } }
 
   function self:now()
     local value
@@ -55,6 +137,7 @@ function M.new(adapters)
     self.state.status, self.state.text, self.state.bar = status, "—", "—"
     self.state.remaining, self.state.hover, self.state.stale, self.state.failureClass = nil, hover, false, nil
     self.state.lastSuccessAt, self.state.suspended, self.state.suspendedUntil = nil, false, nil
+    self.state.batches = {}
     self:render()
   end
   function self:setSuccess(balance, precision, account)
@@ -64,12 +147,14 @@ function M.new(adapters)
     self.state.text, self.state.bar = displayBalance(balance, precision), displayBalance(balance, precision)
     self.state.lastSuccessAt, self.state.stale, self.state.failureClass = self:now(), false, nil
     self.state.suspended, self.state.suspendedUntil = account.suspended == true, account.suspendedUntil
+    self.state.batches = activeBatches(account, self:now(), host)
     self.state.hover = exactBalance(balance)
     if self.state.suspended then
       self.state.hover = self.state.hover .. " (Suspended"
       if self.state.suspendedUntil ~= nil then self.state.hover = self.state.hover .. "; suspendedUntil " .. tostring(self.state.suspendedUntil) end
       self.state.hover = self.state.hover .. ")"
     end
+    self.state.hover = appendBreakdown(self.state.hover, self.state.batches, host)
     self:render()
   end
   function self:setFailure(status, message)
@@ -81,6 +166,7 @@ function M.new(adapters)
       self.state.hover = exactBalance(known) .. " (" .. message
       if self.state.lastSuccessAt ~= nil then self.state.hover = self.state.hover .. "; last successful at " .. tostring(self.state.lastSuccessAt) end
       self.state.hover = self.state.hover .. ")"
+      self.state.hover = appendBreakdown(self.state.hover, self.state.batches, host)
     end
     self:render()
   end
