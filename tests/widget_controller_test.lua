@@ -56,8 +56,11 @@ controller:onConfigChanged()
 assertEqual(#requests, 2, "config change starts a new generation")
 callbacks[1]({ ok = true, status = 200, body = "secret-token" })
 assertEqual(controller:getState().status, "loading", "stale response does not commit")
-callbacks[2]({ ok = true, status = 200, body = "secret-token" })
-assertEqual(controller:getState().status, "loading", "response body is not rendered")
+callbacks[2]({ ok = true, status = 200, body = { account = { creditsBalance = 32.55458 } } })
+assertEqual(controller:getState().status, "success", "valid primary response succeeds")
+assertEqual(controller:getState().remaining, 32.55458, "primary balance is normalized")
+assertEqual(controller:getState().text, "32.6", "bar uses configured precision")
+assertEqual(controller:getState().hover, "32.55458", "hover keeps exact balance")
 
 -- Bounds, glyph default, and one-time low-interval warning are deterministic.
 config.refresh_seconds = 86401
@@ -80,5 +83,42 @@ end
 for _, notification in ipairs(notifications) do
   assertEqual((notification.title .. notification.body):find("secret%-token", 1, false), nil, "token absent from notification")
 end
+
+local function failureController(token)
+  local failureConfig = { token = token, refresh_seconds = 30, precision = 1, glyph = "lightning" }
+  local failureCallbacks, failureRenders = {}, {}
+  local failure = Controller.new({
+    host = {
+      getConfig = function(_, key) return failureConfig[key] end,
+      render = function(_, state) failureRenders[#failureRenders + 1] = state end,
+    },
+    http = function(_, callback)
+      failureCallbacks[#failureCallbacks + 1] = callback
+      return true
+    end,
+  })
+  return failure, failureCallbacks, failureRenders
+end
+
+local malformed, malformedCallbacks, malformedRenders = failureController("malformed-secret")
+malformed:start()
+malformedCallbacks[1]({ ok = true, status = 200, body = { account = { creditsBalance = "not-a-number" }, leaked = "response-secret" } })
+assertEqual(malformed:getState().status, "malformed", "malformed response is classified")
+assertEqual(malformed:getState().remaining, nil, "malformed response does not fabricate balance")
+assertEqual(malformed:getState().hover, "Invalid response", "malformed response is user-safe")
+assertEqual(malformedRenders[#malformedRenders].hover:find("response%-secret", 1, false), nil, "response content is not rendered")
+
+local auth, authCallbacks, authRenders = failureController("auth-secret")
+auth:start()
+authCallbacks[1]({ ok = false, status = 401, body = "auth-secret response body" })
+assertEqual(auth:getState().status, "authentication_failed", "authentication failure is classified")
+assertEqual(auth:getState().hover, "Authentication failed", "authentication failure is user-safe")
+assertEqual(authRenders[#authRenders].hover:find("auth%-secret", 1, false), nil, "credential is not rendered after auth failure")
+
+local unsupported, unsupportedCallbacks = failureController("unsupported-secret")
+unsupported:start()
+unsupportedCallbacks[1]({ ok = false, status = 404, body = "unsupported-secret response body" })
+assertEqual(unsupported:getState().status, "unsupported", "unsupported response is classified")
+assertEqual(unsupported:getState().hover, "Unsupported response", "unsupported response is user-safe")
 
 print("widget controller tests passed")
