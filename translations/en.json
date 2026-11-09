@@ -1,10 +1,20 @@
 {
-  "settings.token.label": "GripHub token",
-  "settings.token.description": "Secret token used to read your GripHub credits.",
-  "settings.refresh_seconds.label": "Refresh interval (seconds)",
-  "settings.refresh_seconds.description": "How often to refresh. Values below 30 seconds increase API traffic.",
-  "settings.precision.label": "Decimal precision",
-  "settings.precision.description": "Number of decimal places shown in the bar.",
-  "settings.glyph.label": "Glyph",
-  "settings.glyph.description": "Glyph shown beside the remaining credits."
+  "settings": {
+    "token": {
+      "label": "GripHub token",
+      "description": "Secret token used to read your GripHub credits."
+    },
+    "refresh_seconds": {
+      "label": "Refresh interval (seconds)",
+      "description": "How often to refresh. Values below 30 seconds increase API traffic."
+    },
+    "precision": {
+      "label": "Decimal precision",
+      "description": "Number of decimal places shown in the bar."
+    },
+    "glyph": {
+      "label": "Glyph",
+      "description": "Glyph shown beside the remaining credits."
+    }
+  }
 }

@@ -6,7 +6,7 @@ author = "ianmustafa"
 license = "MIT"
 icon = "lightning-bolt"
 description = "Community-maintained GripHub credits status for the Noctalia bar."
-tags = ["bar", "credits", "indicator"]
+tags = ["bar", "indicator"]
 dependencies = ["xdg-open"]
 
 [[setting]]
