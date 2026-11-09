@@ -1,8 +1,8 @@
 {
   "settings": {
     "token": {
-      "label": "GripHub token",
-      "description": "Secret token used to read your GripHub credits."
+      "label": "Griphub token",
+      "description": "Secret token used to read your Griphub credits."
     },
     "refresh_seconds": {
       "label": "Refresh interval (seconds)",

@@ -275,7 +275,7 @@ function M.new(adapters)
     if type(host.setUpdateInterval) == "function" then host:setUpdateInterval(interval * 1000) end
     if interval < 30 and not self.warningSent then
       self.warningSent = true
-      if type(notify) == "function" then notify("GripHub status", "Refresh interval below 30 seconds may increase traffic") end
+      if type(notify) == "function" then notify("Griphub status", "Refresh interval below 30 seconds may increase traffic") end
     end
     if token == "" then
       self.inFlight = false

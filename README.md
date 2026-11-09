@@ -1,4 +1,4 @@
-# GripHub Status
+# Griphub Status
 
 `ianmustafa/griphub-status` is a community-maintained Noctalia plugin. It is
 not produced, maintained, or endorsed by Noctalia, and this repository does
@@ -9,8 +9,8 @@ submission to `noctalia-dev/community-plugins`.
 
 1. Install the plugin from a local checkout or the community-plugin review
    workflow.
-2. Open **Noctalia Settings → Plugins → GripHub Status**.
-3. Enter your GripHub token in **GripHub token** and save the settings. The
+2. Open **Noctalia Settings → Plugins → Griphub Status**.
+3. Enter your Griphub token in **Griphub token** and save the settings. The
    token setting is declared `secret = true`, so credential-omitted or
    credential-blanked Noctalia configuration exports do not disclose it.
 4. Place the bar widget wherever you want it. An empty token keeps the widget
@@ -39,7 +39,7 @@ acceptance tests.
 The widget tries `/api/user-usage` first and falls back to `/v1/credits` only
 when the primary contract is unsupported. It remembers the first successful
 contract for later refreshes. The request and response contracts are exercised
-with local fixtures; GripHub Router and Noctalia are not modified or required
+with local fixtures; Griphub Router and Noctalia are not modified or required
 for verification.
 
 Hover and bar output make state explicit:
@@ -57,7 +57,7 @@ Hover and bar output make state explicit:
 
 ## Portal click
 
-Clicking the widget opens the fixed GripHub portal:
+Clicking the widget opens the fixed Griphub portal:
 
 `https://griphubrouter.web.id/portal`
 
@@ -74,7 +74,7 @@ python3 tests/plugin_metadata_test.py
 ```
 
 Both suites use injected adapters and checked-in fixtures; they do not contact
-GripHub or require credentials. The manifest keeps the required `plugin_api =
+Griphub or require credentials. The manifest keeps the required `plugin_api =
 47` baseline, the `ianmustafa/griphub-status` identity, community-maintainer
 attribution, and the secret token setting. The package is ready to submit for
 community review; inclusion in the official Noctalia catalog has not been

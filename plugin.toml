@@ -1,11 +1,11 @@
 id = "ianmustafa/griphub-status"
-name = "GripHub Status"
+name = "Griphub Status"
 version = "0.1.0"
 plugin_api = 47
 author = "ianmustafa"
 license = "MIT"
 icon = "lightning-bolt"
-description = "Community-maintained GripHub credits status for the Noctalia bar."
+description = "Community-maintained Griphub credits status for the Noctalia bar."
 tags = ["bar", "indicator"]
 dependencies = ["xdg-open"]
 
