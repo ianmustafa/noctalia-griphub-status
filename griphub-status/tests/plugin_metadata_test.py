@@ -10,7 +10,7 @@ translations = json.loads((ROOT / "translations/en.json").read_text())
 readme = (ROOT / "README.md").read_text()
 
 assert manifest["id"] == "ianmustafa/griphub-status"
-assert manifest["plugin_api"] == 47
+assert manifest["plugin_api"] == 24
 for required_file in ("README.md", "thumbnail.webp", "translations/en.json"):
     assert (ROOT / required_file).is_file(), f"missing catalog file {required_file}"
 
@@ -22,7 +22,8 @@ assert "community" in manifest["description"].lower()
 settings = {setting["key"]: setting for setting in manifest["setting"]}
 token = settings["token"]
 assert token["type"] == "string"
-assert token["secret"] is True
+# `secret` requires plugin_api >= 47, which would exclude API 43 shells.
+assert "secret" not in token
 assert token["default"] == ""
 assert settings["refresh_seconds"]["default"] == 30
 assert (settings["refresh_seconds"]["min"], settings["refresh_seconds"]["max"]) == (1, 86400)

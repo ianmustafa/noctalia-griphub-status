@@ -11,8 +11,10 @@ submission to `noctalia-dev/community-plugins`.
    workflow.
 2. Open **Noctalia Settings → Plugins → Griphub Status**.
 3. Enter your Griphub token in **Griphub token** and save the settings. The
-   token setting is declared `secret = true`, so credential-omitted or
-   credential-blanked Noctalia configuration exports do not disclose it.
+   token is a plain string setting, so a Noctalia configuration export includes
+   it; remove it before sharing your config. The `secret` setting flag needs
+   plugin API 47 and is not used, to keep the plugin compatible with older
+   shells.
 4. Place the bar widget wherever you want it. An empty token keeps the widget
    neutral and shows `Token not configured`; it does not make a request or
    display a fabricated zero balance.
@@ -75,7 +77,7 @@ python3 tests/plugin_metadata_test.py
 
 Both suites use injected adapters and checked-in fixtures; they do not contact
 Griphub or require credentials. The manifest keeps the required `plugin_api =
-47` baseline, the `ianmustafa/griphub-status` identity, community-maintainer
-attribution, and the secret token setting. The package is ready to submit for
+24` baseline (compatible with plugin API 43 and later), the
+`ianmustafa/griphub-status` identity, and community-maintainer attribution. The package is ready to submit for
 community review; inclusion in the official Noctalia catalog has not been
 claimed.

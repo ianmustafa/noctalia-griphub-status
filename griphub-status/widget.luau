@@ -1,5 +1,5 @@
 --!nonstrict
--- Griphub community widget. Credentials are read only from the secret host setting,
+-- Griphub community widget. Credentials are read only from the token plugin setting,
 -- sent only as an HTTP header, and never included in UI, URLs, notifications, or
 -- process arguments.
 local Controller = require("./widget_controller.luau")
