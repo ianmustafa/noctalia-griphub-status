@@ -2,6 +2,7 @@ local M = {}
 
 local PORTAL_URL = "https://griphubrouter.web.id/portal"
 local PRIMARY_URL = "https://griphubrouter.web.id/api/user-usage"
+local FALLBACK_URL = "https://griphubrouter.web.id/v1/credits"
 
 local function finite(value)
   local n = tonumber(value)
@@ -32,7 +33,7 @@ function M.new(adapters)
   local openPortal = adapters.openPortal or adapters.portal
   local http = adapters.http
   local self = { host = host, notify = notify, openPortal = openPortal, http = http,
-    inFlight = false, generation = 0, warningSent = false,
+    inFlight = false, generation = 0, warningSent = false, endpoint = nil,
     state = { status = "unconfigured", text = "—", glyph = "lightning", hover = "Token not configured" } }
 
   function self:config()
@@ -83,37 +84,54 @@ function M.new(adapters)
     if ok and type(decoded) == "table" then return decoded end
     return nil
   end
-  function self:applyResponse(response, precision)
+  function self:applyResponse(response, precision, endpoint)
     local status = response and tonumber(response.status)
     if status == 401 or status == 403 then
       self:setFailure("authentication_failed", "Authentication failed")
-      return
+      return "complete"
     end
     if status == 404 or status == 405 or status == 501 then
       self:setFailure("unsupported", "Unsupported response")
-      return
+      return "unsupported"
     end
     if response == nil or response.ok == false or (status ~= nil and (status < 200 or status >= 300)) then
       self:setFailure("service_unavailable", "Service unavailable")
-      return
+      return "complete"
     end
     local payload = self:decode(response)
-    local account = payload and payload.account
-    local balance = type(account) == "table" and finite(account.creditsBalance) or nil
+    local balance
+    if endpoint == FALLBACK_URL then
+      local fallbackBalance = payload and payload.balance
+      balance = type(fallbackBalance) == "table" and finite(fallbackBalance.remaining) or nil
+    else
+      local account = payload and payload.account
+      balance = type(account) == "table" and finite(account.creditsBalance) or nil
+    end
     if balance == nil then
       self:setFailure("malformed", "Invalid response")
-      return
+      return "complete"
     end
+    self.endpoint = endpoint
     self:setSuccess(balance, precision)
+    return "complete"
   end
-  function self:request(token, generation)
-    local request = { url = PRIMARY_URL, method = "GET",
+  function self:request(token, generation, endpoint, attempted)
+    attempted = attempted or { [endpoint] = true }
+    local request = { url = endpoint, method = "GET",
       headers = { "Authorization: Bearer " .. token, "Accept: application/json" } }
     local function completed(response)
       if generation ~= self.generation then return end
-      self.inFlight = false
       local _, _, precision = self:config()
-      self:applyResponse(response, precision)
+      local outcome = self:applyResponse(response, precision, endpoint)
+      if outcome == "unsupported" then
+        local alternate = endpoint == PRIMARY_URL and FALLBACK_URL or PRIMARY_URL
+        if not attempted[alternate] then
+          attempted[alternate] = true
+          self:request(token, generation, alternate, attempted)
+          return
+        end
+      end
+      self.inFlight = false
     end
     local accepted
     if type(http) == "function" then accepted = http(request, completed)
@@ -141,7 +159,7 @@ function M.new(adapters)
       self.state.text, self.state.bar = "—", "—"
     end
     self:render()
-    self:request(token, self.generation)
+    self:request(token, self.generation, self.endpoint or PRIMARY_URL)
   end
   function self:start() return self:refresh() end
   function self:tick() return self:refresh() end
@@ -151,4 +169,5 @@ function M.new(adapters)
   return self
 end
 M.PORTAL_URL, M.PRIMARY_URL = PORTAL_URL, PRIMARY_URL
+M.FALLBACK_URL = FALLBACK_URL
 return M
