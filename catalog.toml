@@ -1,0 +1,16 @@
+# Noctalia plugins catalog.
+# Index of every plugin this source ships. Keep one [[plugin]] row per plugin subdirectory.
+# The per-plugin plugin.toml stays authoritative. Do not submit this file to community-plugins; CI generates it there.
+
+[[plugin]]
+id = "ianmustafa/griphub-status"
+name = "Griphub Status"
+version = "0.1.0"
+updated_at = 1794198407
+added_at = 1794198407
+author = "ianmustafa"
+license = "MIT"
+icon = "lightning-bolt"
+description = "Community-maintained Griphub credits status for the Noctalia bar."
+plugin_api = 47
+tags = ["bar", "indicator"]
