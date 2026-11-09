@@ -1,0 +1,47 @@
+id = "ianmustafa/griphub-status"
+name = "GripHub Status"
+version = "0.1.0"
+plugin_api = 47
+author = "ianmustafa"
+license = "MIT"
+icon = "lightning-bolt"
+description = "Community-maintained GripHub credits status for the Noctalia bar."
+tags = ["bar", "credits", "indicator"]
+dependencies = ["xdg-open"]
+
+[[setting]]
+key = "token"
+type = "string"
+label_key = "settings.token.label"
+description_key = "settings.token.description"
+default = ""
+secret = true
+
+[[setting]]
+key = "refresh_seconds"
+type = "int"
+label_key = "settings.refresh_seconds.label"
+description_key = "settings.refresh_seconds.description"
+default = 30
+min = 1
+max = 86400
+
+[[setting]]
+key = "precision"
+type = "int"
+label_key = "settings.precision.label"
+description_key = "settings.precision.description"
+default = 1
+min = 0
+max = 4
+
+[[setting]]
+key = "glyph"
+type = "glyph"
+label_key = "settings.glyph.label"
+description_key = "settings.glyph.description"
+default = "lightning"
+
+[[widget]]
+id = "bar"
+entry = "widget.luau"
