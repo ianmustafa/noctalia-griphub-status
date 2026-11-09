@@ -23,7 +23,9 @@ local function stateView(state)
   local text = state.text or "—"
   return { text = text, bar = text, glyph = state.glyph, hover = state.hover,
     hoverText = state.hover, status = state.status, remaining = state.remaining,
-    stale = state.stale == true }
+    stale = state.stale == true, failureClass = state.failureClass,
+    lastSuccessAt = state.lastSuccessAt, lastSuccessTime = state.lastSuccessAt,
+    suspended = state.suspended == true, suspendedUntil = state.suspendedUntil }
 end
 
 function M.new(adapters)
@@ -32,9 +34,56 @@ function M.new(adapters)
   local notify = adapters.notify or adapters.notification
   local openPortal = adapters.openPortal or adapters.portal
   local http = adapters.http
+  local clock = adapters.now or adapters.clock
   local self = { host = host, notify = notify, openPortal = openPortal, http = http,
     inFlight = false, generation = 0, warningSent = false, endpoint = nil,
-    state = { status = "unconfigured", text = "—", glyph = "lightning", hover = "Token not configured" } }
+    state = { status = "unconfigured", text = "—", glyph = "lightning", hover = "Token not configured",
+      remaining = nil, stale = false, failureClass = nil, lastSuccessAt = nil, suspended = false, suspendedUntil = nil } }
+
+  function self:now()
+    local value
+    if type(clock) == "function" then
+      local ok, result = pcall(clock)
+      if ok then value = result end
+    elseif type(host.now) == "function" then
+      local ok, result = pcall(function() return host:now() end)
+      if ok then value = result end
+    end
+    return value ~= nil and value or os.time()
+  end
+  function self:setNeutral(status, hover)
+    self.state.status, self.state.text, self.state.bar = status, "—", "—"
+    self.state.remaining, self.state.hover, self.state.stale, self.state.failureClass = nil, hover, false, nil
+    self.state.lastSuccessAt, self.state.suspended, self.state.suspendedUntil = nil, false, nil
+    self:render()
+  end
+  function self:setSuccess(balance, precision, account)
+    account = account or {}
+    self.state.status = account.suspended == true and "suspended" or "success"
+    self.state.remaining = balance
+    self.state.text, self.state.bar = displayBalance(balance, precision), displayBalance(balance, precision)
+    self.state.lastSuccessAt, self.state.stale, self.state.failureClass = self:now(), false, nil
+    self.state.suspended, self.state.suspendedUntil = account.suspended == true, account.suspendedUntil
+    self.state.hover = exactBalance(balance)
+    if self.state.suspended then
+      self.state.hover = self.state.hover .. " (Suspended"
+      if self.state.suspendedUntil ~= nil then self.state.hover = self.state.hover .. "; suspendedUntil " .. tostring(self.state.suspendedUntil) end
+      self.state.hover = self.state.hover .. ")"
+    end
+    self:render()
+  end
+  function self:setFailure(status, message)
+    local known = self.state.remaining
+    self.state.status, self.state.stale, self.state.failureClass = status, known ~= nil, status
+    if known == nil then
+      self.state.text, self.state.bar, self.state.hover = "—", "—", message
+    else
+      self.state.hover = exactBalance(known) .. " (" .. message
+      if self.state.lastSuccessAt ~= nil then self.state.hover = self.state.hover .. "; last successful at " .. tostring(self.state.lastSuccessAt) end
+      self.state.hover = self.state.hover .. ")"
+    end
+    self:render()
+  end
 
   function self:config()
     local token = trim(getConfig(host, "token"))
@@ -55,27 +104,6 @@ function M.new(adapters)
     if type(host.setTooltip) == "function" then host:setTooltip(snapshot.hover) end
     return snapshot
   end
-  function self:setNeutral(status, hover)
-    self.state.status, self.state.text, self.state.bar = status, "—", "—"
-    self.state.remaining, self.state.hover, self.state.stale = nil, hover, false
-    self:render()
-  end
-  function self:setSuccess(balance, precision)
-    self.state.status, self.state.remaining = "success", balance
-    self.state.text, self.state.bar = displayBalance(balance, precision), displayBalance(balance, precision)
-    self.state.hover, self.state.stale = exactBalance(balance), false
-    self:render()
-  end
-  function self:setFailure(status, message)
-    local known = self.state.remaining
-    self.state.status, self.state.stale = status, known ~= nil
-    if known == nil then
-      self.state.text, self.state.bar, self.state.hover = "—", "—", message
-    else
-      self.state.hover = exactBalance(known) .. " (" .. message .. ")"
-    end
-    self:render()
-  end
   function self:decode(response)
     local body = response and response.body
     if type(body) == "table" then return body end
@@ -94,25 +122,33 @@ function M.new(adapters)
       self:setFailure("unsupported", "Unsupported response")
       return "unsupported"
     end
+    if status == 429 then
+      self:setFailure("rate_limited", "Rate limited")
+      return "complete"
+    end
     if response == nil or response.ok == false or (status ~= nil and (status < 200 or status >= 300)) then
       self:setFailure("service_unavailable", "Service unavailable")
       return "complete"
     end
     local payload = self:decode(response)
+    local account = payload and payload.account
     local balance
     if endpoint == FALLBACK_URL then
       local fallbackBalance = payload and payload.balance
       balance = type(fallbackBalance) == "table" and finite(fallbackBalance.remaining) or nil
     else
-      local account = payload and payload.account
       balance = type(account) == "table" and finite(account.creditsBalance) or nil
+    end
+    if balance == nil and type(account) == "table" and account.suspended == true and self.state.remaining ~= nil then
+      balance = self.state.remaining
     end
     if balance == nil then
       self:setFailure("malformed", "Invalid response")
       return "complete"
     end
+    if type(account) ~= "table" then account = {} end
     self.endpoint = endpoint
-    self:setSuccess(balance, precision)
+    self:setSuccess(balance, precision, account)
     return "complete"
   end
   function self:request(token, generation, endpoint, attempted)
