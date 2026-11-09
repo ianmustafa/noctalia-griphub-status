@@ -12,7 +12,6 @@ end
 local function trim(value) return tostring(value or ""):match("^%s*(.-)%s*$") end
 local function getConfig(host, key)
   if type(host.getConfig) == "function" then return host:getConfig(key) end
-  if type(host.config) == "function" then return host:config(key) end
   return nil
 end
 local function exactBalance(value) return tostring(value) end
@@ -50,9 +49,8 @@ local function parseExpiry(value)
   return localEpoch + os.difftime(localEpoch, utcEpoch), true
 end
 local function localTime(host, epoch)
-  local formatter = host.formatLocalTime or host.localTime
-  if type(formatter) == "function" then
-    local ok, value = pcall(function() return formatter(epoch) end)
+  if type(host.formatLocalTime) == "function" then
+    local ok, value = pcall(function() return host.formatLocalTime(epoch) end)
     if ok and value ~= nil then return tostring(value) end
   end
   return os.date("%Y-%m-%d %H:%M:%S", epoch)
@@ -63,8 +61,13 @@ local function humanizeReason(value)
   reason = reason:gsub("[_%-]+", " "):gsub("%s+", " ")
   return reason:gsub("^%l", string.upper)
 end
+local function batchIdentity(batch, amount, rawExpiry)
+  -- The observed payload has no batch id; these fields form its stable identity.
+  return table.concat({ tostring(amount), tostring(batch.receivedAt or ""), tostring(rawExpiry or ""),
+    tostring(batch.reason or "") }, "\31")
+end
 local function activeBatches(account, now, host)
-  local result, source = {}, account and account.batches
+  local result, source, seen = {}, account and account.batches, {}
   if type(source) ~= "table" then return result end
   now = finite(now) or os.time()
   for index, batch in ipairs(source) do
@@ -74,7 +77,9 @@ local function activeBatches(account, now, host)
       if rawExpiry == nil then rawExpiry = batch.expires_at end
       if rawExpiry == nil then rawExpiry = batch.expiry end
       local expiry, validExpiry = parseExpiry(rawExpiry)
-      if amount ~= nil and amount > 0 and validExpiry and (expiry == nil or expiry > now) then
+      local identity = amount ~= nil and batchIdentity(batch, amount, rawExpiry) or nil
+      if amount ~= nil and amount > 0 and validExpiry and (expiry == nil or expiry > now) and not seen[identity] then
+        seen[identity] = true
         result[#result + 1] = { amount = amount, expiry = expiry, reason = humanizeReason(batch.reason), order = index }
       end
     end
@@ -113,12 +118,12 @@ end
 function M.new(adapters)
   adapters = adapters or {}
   local host = adapters.host or {}
-  local notify = adapters.notify or adapters.notification
-  local openPortal = adapters.openPortal or adapters.portal
+  local notify = adapters.notify
+  local openPortal = adapters.openPortal
   local http = adapters.http
-  local clock = adapters.now or adapters.clock
+  local clock = adapters.now
   local self = { host = host, notify = notify, openPortal = openPortal, http = http,
-    inFlight = false, generation = 0, warningSent = false, endpoint = nil,
+    inFlight = false, generation = 0, warningSent = false, endpoint = nil, configuration = nil,
     state = { status = "unconfigured", text = "—", glyph = "lightning", hover = "Token not configured",
       remaining = nil, batches = {}, stale = false, failureClass = nil, lastSuccessAt = nil, suspended = false, suspendedUntil = nil } }
 
@@ -127,11 +132,8 @@ function M.new(adapters)
     if type(clock) == "function" then
       local ok, result = pcall(clock)
       if ok then value = result end
-    elseif type(host.now) == "function" then
-      local ok, result = pcall(function() return host:now() end)
-      if ok then value = result end
-    end
     return value ~= nil and value or os.time()
+  end
   end
   function self:setNeutral(status, hover)
     self.state.status, self.state.text, self.state.bar = status, "—", "—"
@@ -261,7 +263,14 @@ function M.new(adapters)
     if accepted == false then completed({ ok = false, status = 0 }) end
   end
   function self:refresh()
-    local token, interval, _, glyph = self:config()
+    local token, interval, precision, glyph = self:config()
+    local configuration = table.concat({ token, tostring(interval), tostring(precision), glyph }, "\0")
+    if self.configuration ~= configuration then
+      self.configuration = configuration
+      self.endpoint = nil
+      self.inFlight = false
+      self.generation = self.generation + 1
+    end
     self.state.glyph = glyph
     if type(host.setUpdateInterval) == "function" then host:setUpdateInterval(interval * 1000) end
     if interval < 30 and not self.warningSent then
@@ -285,7 +294,11 @@ function M.new(adapters)
   end
   function self:start() return self:refresh() end
   function self:tick() return self:refresh() end
-  function self:onConfigChanged() self.inFlight = false; return self:refresh() end
+  function self:onConfigChanged()
+    self.inFlight = false
+    self.generation = self.generation + 1
+    return self:refresh()
+  end
   function self:click() if type(openPortal) == "function" then openPortal(PORTAL_URL) end end
   function self:getState() return stateView(self.state) end
   return self

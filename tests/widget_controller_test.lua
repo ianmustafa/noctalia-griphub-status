@@ -61,6 +61,48 @@ assertEqual(controller:getState().status, "success", "valid primary response suc
 assertEqual(controller:getState().remaining, 32.55458, "primary balance is normalized")
 assertEqual(controller:getState().text, "32.6", "bar uses configured precision")
 assertEqual(controller:getState().hover, "32.55458", "hover keeps exact balance")
+-- Clearing a token invalidates the in-flight generation and returns to neutral.
+local clearedConfig = { token = "clear-secret", refresh_seconds = 30, precision = 1, glyph = "lightning" }
+local clearedCallbacks = {}
+local cleared = Controller.new({
+  host = {
+    getConfig = function(_, key) return clearedConfig[key] end,
+    render = function() end,
+  },
+  http = function(_, callback)
+    clearedCallbacks[#clearedCallbacks + 1] = callback
+    return true
+  end,
+})
+cleared:start()
+clearedConfig.token = ""
+cleared:onConfigChanged()
+clearedCallbacks[1]({ ok = true, status = 200, body = { account = { creditsBalance = 99 } } })
+assertEqual(cleared:getState().status, "unconfigured", "clearing token stays neutral after a late response")
+assertEqual(cleared:getState().remaining, nil, "clearing token discards the old generation balance")
+
+-- Changing credentials renegotiates the primary contract rather than reusing a prior fallback.
+local credentialConfig = { token = "first-secret", refresh_seconds = 30, precision = 1, glyph = "lightning" }
+local credentialRequests, credentialCallbacks = {}, {}
+local credential = Controller.new({
+  host = {
+    getConfig = function(_, key) return credentialConfig[key] end,
+    render = function() end,
+  },
+  http = function(request, callback)
+    credentialRequests[#credentialRequests + 1] = request
+    credentialCallbacks[#credentialCallbacks + 1] = callback
+    return true
+  end,
+})
+credential:start()
+credentialCallbacks[1]({ ok = false, status = 404 })
+credentialCallbacks[2]({ ok = true, status = 200, body = { balance = { remaining = 4 } } })
+credentialConfig.token = "second-secret"
+credential:onConfigChanged()
+assertEqual(credentialRequests[3].url, "https://griphubrouter.web.id/api/user-usage", "new credentials start primary negotiation")
+credentialCallbacks[3]({ ok = true, status = 200, body = { account = { creditsBalance = 5 } } })
+assertEqual(credential:getState().remaining, 5, "new credentials accept the primary response")
 
 -- Bounds, glyph default, and one-time low-interval warning are deterministic.
 config.refresh_seconds = 86401
@@ -122,19 +164,23 @@ assertEqual(unsupported:getState().status, "unsupported", "unsupported response 
 assertEqual(unsupported:getState().hover, "Unsupported response", "unsupported response is user-safe")
 
 print("widget controller tests passed")
+local function requestController(token, requestsForCase, callbacksForCase)
+  return Controller.new({
+    host = {
+      getConfig = function(_, key) return ({ token = token, refresh_seconds = 30, precision = 1, glyph = "lightning" })[key] end,
+      render = function() end,
+    },
+    http = function(request, callback)
+      requestsForCase[#requestsForCase + 1] = request
+      callbacksForCase[#callbacksForCase + 1] = callback
+      return true
+    end,
+  })
+end
+
 -- An unsupported primary contract probes the fallback exactly once and caches it.
 local fallbackRequests, fallbackCallbacks = {}, {}
-local fallback = Controller.new({
-  host = {
-    getConfig = function(_, key) return ({ token = "fallback-secret", refresh_seconds = 30, precision = 1, glyph = "lightning" })[key] end,
-    render = function() end,
-  },
-  http = function(request, callback)
-    fallbackRequests[#fallbackRequests + 1] = request
-    fallbackCallbacks[#fallbackCallbacks + 1] = callback
-    return true
-  end,
-})
+local fallback = requestController("fallback-secret", fallbackRequests, fallbackCallbacks)
 fallback:start()
 assertEqual(#fallbackRequests, 1, "fallback starts with primary request")
 fallbackCallbacks[1]({ ok = false, status = 404, body = "unsupported primary" })
@@ -153,17 +199,7 @@ assertEqual(fallback:getState().remaining, 31.5, "cached fallback refresh update
 
 -- A malformed fallback payload is terminal and does not probe either contract again.
 local badFallbackRequests, badFallbackCallbacks = {}, {}
-local badFallback = Controller.new({
-  host = {
-    getConfig = function(_, key) return ({ token = "bad-fallback-secret", refresh_seconds = 30, precision = 1, glyph = "lightning" })[key] end,
-    render = function() end,
-  },
-  http = function(request, callback)
-    badFallbackRequests[#badFallbackRequests + 1] = request
-    badFallbackCallbacks[#badFallbackCallbacks + 1] = callback
-    return true
-  end,
-})
+local badFallback = requestController("bad-fallback-secret", badFallbackRequests, badFallbackCallbacks)
 badFallback:start()
 badFallbackCallbacks[1]({ ok = false, status = 404 })
 badFallbackCallbacks[2]({ ok = true, status = 200, body = { balance = { remaining = "not-a-number" } } })
@@ -172,17 +208,7 @@ assertEqual(badFallback:getState().status, "malformed", "malformed fallback is c
 
 -- An unsupported fallback response does not loop or probe a third endpoint.
 local unsupportedFallbackRequests, unsupportedFallbackCallbacks = {}, {}
-local unsupportedFallback = Controller.new({
-  host = {
-    getConfig = function(_, key) return ({ token = "unsupported-fallback-secret", refresh_seconds = 30, precision = 1, glyph = "lightning" })[key] end,
-    render = function() end,
-  },
-  http = function(request, callback)
-    unsupportedFallbackRequests[#unsupportedFallbackRequests + 1] = request
-    unsupportedFallbackCallbacks[#unsupportedFallbackCallbacks + 1] = callback
-    return true
-  end,
-})
+local unsupportedFallback = requestController("unsupported-fallback-secret", unsupportedFallbackRequests, unsupportedFallbackCallbacks)
 unsupportedFallback:start()
 unsupportedFallbackCallbacks[1]({ ok = false, status = 404 })
 unsupportedFallbackCallbacks[2]({ ok = false, status = 404 })
@@ -192,17 +218,7 @@ assertEqual(unsupportedFallback:getState().status, "unsupported", "unsupported f
 -- Only an explicitly unsupported primary response may trigger fallback.
 local function assertNoFallback(status, body, expectedStatus)
   local requestsForCase, callbacksForCase = {}, {}
-  local case = Controller.new({
-    host = {
-      getConfig = function(_, key) return ({ token = "failure-secret", refresh_seconds = 30, precision = 1, glyph = "lightning" })[key] end,
-      render = function() end,
-    },
-    http = function(request, callback)
-      requestsForCase[#requestsForCase + 1] = request
-      callbacksForCase[#callbacksForCase + 1] = callback
-      return true
-    end,
-  })
+  local case = requestController("failure-secret", requestsForCase, callbacksForCase)
   case:start()
   callbacksForCase[1]({ ok = status == 200, status = status, body = body })
   assertEqual(#requestsForCase, 1, "non-unsupported primary does not probe fallback")
@@ -330,9 +346,10 @@ assertEqual(presentation(999.95, 1).text, "1000.0", "ordinary rounding below com
 assertEqual(presentation(32.55458, 4).hover, "32.55458", "hover keeps exact un-compacted balance")
 
 local batches = {
-  { credits = 5, expiresAt = 200, reason = "promo_code_bonus" },
-  { credits = 4, expiresAt = 100, reason = "expired" },
-  { credits = 3, expiresAt = 101, reason = "next_up" },
+  { credits = 5, receivedAt = "promo", expiresAt = 200, reason = "promo_code_bonus" },
+  { credits = 4, receivedAt = "expired", expiresAt = 100, reason = "expired" },
+  { credits = 3, receivedAt = "next", expiresAt = 101, reason = "next_up" },
+  { credits = 3, receivedAt = "next", expiresAt = 101, reason = "next_up" },
   { credits = 2, reason = nil },
   { credits = 0, expiresAt = 300, reason = "zero" },
   { credits = -1, expiresAt = 300, reason = "negative" },
@@ -344,6 +361,7 @@ local batchState = presentation(12.25, 1, { creditsBalance = 12.25, batches = ba
   function(epoch) return "LOCAL(" .. tostring(epoch) .. ")" end)
 assertTrue(batchState.hover:find("Active batches:", 1, true) ~= nil, "active breakdown heading")
 assertTrue(batchState.hover:find("3 credits; expires LOCAL(101); reason Next up", 1, true) ~= nil, "earliest active expiry first")
+assertEqual(select(2, batchState.hover:gsub("3 credits; expires LOCAL%(101%); reason Next up", "")), 1, "duplicate batch identity is shown once")
 assertTrue(batchState.hover:find("5 credits; expires LOCAL(200); reason Promo code bonus", 1, true) ~= nil, "reason and local expiry formatting")
 assertTrue(batchState.hover:find("2 credits; No expiry reported; reason Reason unavailable", 1, true) ~= nil, "missing expiry and reason labels")
 assertEqual(batchState.hover:find("expired", 1, true), nil, "expired and boundary rows omitted")
