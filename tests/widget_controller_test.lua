@@ -209,9 +209,98 @@ local function assertNoFallback(status, body, expectedStatus)
   assertEqual(case:getState().status, expectedStatus, "primary failure classification")
 end
 assertNoFallback(401, "auth response", "authentication_failed")
-assertNoFallback(429, "rate response", "service_unavailable")
+assertNoFallback(429, "rate response", "rate_limited")
 assertNoFallback(500, "server response", "service_unavailable")
 assertNoFallback(0, "network response", "service_unavailable")
 assertNoFallback(200, { account = { creditsBalance = "not-a-number" } }, "malformed")
 
 print("fallback behavior tests passed")
+-- Refresh failures retain the last successful value, expose freshness metadata, and recover.
+local lifecycleConfig = { token = "lifecycle-secret", refresh_seconds = 30, precision = 1, glyph = "lightning" }
+local lifecycleRequests, lifecycleCallbacks, lifecycleRenders = {}, {}, {}
+local now = 100
+local lifecycle = Controller.new({
+  host = {
+    getConfig = function(_, key) return lifecycleConfig[key] end,
+    setUpdateInterval = function(_, milliseconds) interval = milliseconds end,
+    render = function(_, state) lifecycleRenders[#lifecycleRenders + 1] = state end,
+  },
+  now = function() return now end,
+  http = function(request, callback)
+    lifecycleRequests[#lifecycleRequests + 1] = request
+    lifecycleCallbacks[#lifecycleCallbacks + 1] = callback
+    return true
+  end,
+})
+lifecycle:start()
+assertEqual(#lifecycleRequests, 1, "startup fetch is immediate")
+lifecycleCallbacks[1]({ ok = true, status = 200, body = { account = { creditsBalance = 12.25 } } })
+assertEqual(lifecycle:getState().status, "success", "successful lifecycle fetch")
+assertEqual(lifecycle:getState().lastSuccessAt, 100, "success timestamp is retained")
+now = 125
+lifecycle:tick()
+assertEqual(#lifecycleRequests, 2, "scheduled tick starts next fetch")
+lifecycle:tick()
+assertEqual(#lifecycleRequests, 2, "in-flight ticks are skipped")
+lifecycleCallbacks[2]({ ok = false, status = 503 })
+local stale = lifecycle:getState()
+assertEqual(stale.status, "service_unavailable", "server failure is classified")
+assertEqual(stale.remaining, 12.25, "failure retains last balance")
+assertEqual(stale.stale, true, "failure marks retained balance stale")
+assertEqual(stale.lastSuccessAt, 100, "failure retains last success time")
+assertTrue(stale.hover:find("Service unavailable", 1, true) ~= nil, "failure class is shown")
+assertTrue(stale.hover:find("100", 1, true) ~= nil, "last success time is shown")
+now = 150
+lifecycle:tick()
+assertEqual(#lifecycleRequests, 3, "failure follows normal schedule")
+lifecycleCallbacks[3]({ ok = true, status = 200, body = { account = { creditsBalance = 9.5 } } })
+assertEqual(lifecycle:getState().status, "success", "successful recovery clears stale state")
+assertEqual(lifecycle:getState().remaining, 9.5, "recovery updates balance")
+assertEqual(lifecycle:getState().lastSuccessAt, 150, "recovery updates success time")
+
+-- Rate limiting is distinct from service failure and retains a known balance.
+now = 175
+lifecycle:tick()
+lifecycleCallbacks[4]({ ok = false, status = 429 })
+assertEqual(lifecycle:getState().status, "rate_limited", "429 is classified as rate limited")
+assertEqual(lifecycle:getState().remaining, 9.5, "rate limiting retains balance")
+assertTrue(lifecycle:getState().hover:find("Rate limited", 1, true) ~= nil, "rate limit class is shown")
+
+-- A suspended account is visible without discarding its normalized balance.
+local suspensionCallbacks, suspensionRequests = {}, {}
+local suspension = Controller.new({
+  host = {
+    getConfig = function(_, key) return ({ token = "suspension-secret", refresh_seconds = 30, precision = 1, glyph = "lightning" })[key] end,
+    render = function() end,
+  },
+  now = function() return 200 end,
+  http = function(request, callback)
+    suspensionRequests[#suspensionRequests + 1] = request
+    suspensionCallbacks[#suspensionCallbacks + 1] = callback
+    return true
+  end,
+})
+suspension:start()
+suspensionCallbacks[1]({ ok = true, status = 200, body = { account = { creditsBalance = 4.25, suspended = true, suspendedUntil = "2026-12-01T00:00:00Z" } } })
+local suspended = suspension:getState()
+assertEqual(suspended.status, "suspended", "suspension is classified")
+assertEqual(suspended.remaining, 4.25, "suspension preserves balance")
+assertEqual(suspended.suspended, true, "suspension is exposed")
+assertEqual(suspended.suspendedUntil, "2026-12-01T00:00:00Z", "suspension end is exposed")
+assertTrue(suspended.hover:find("2026-12-01T00:00:00Z", 1, true) ~= nil, "suspension end is shown")
+
+-- A failure before any successful response remains neutral instead of fabricating zero.
+local neutralCallbacks = {}
+local neutral = Controller.new({
+  host = {
+    getConfig = function(_, key) return ({ token = "neutral-secret", refresh_seconds = 30, precision = 1, glyph = "lightning" })[key] end,
+    render = function() end,
+  },
+  http = function(_, callback) neutralCallbacks[#neutralCallbacks + 1] = callback; return true end,
+})
+neutral:start()
+neutralCallbacks[1]({ ok = false, status = 500 })
+assertEqual(neutral:getState().remaining, nil, "failed first fetch has no balance")
+assertEqual(neutral:getState().text, "—", "failed first fetch stays neutral")
+
+print("refresh lifecycle tests passed")
